@@ -1,0 +1,22 @@
+cat > /workspace/runpod-slim/ComfyUI/RamitUtils/fresh_start.sh << 'EOF'
+#!/bin/bash
+echo "Stopping any existing ComfyUI process..."
+pkill -9 -f "main.py"
+sleep 3
+
+echo "Freeing OS cache too, for good measure..."
+sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || echo "  (cache drop skipped - needs elevated permission, not critical)"
+
+echo "Starting ComfyUI fresh..."
+cd /workspace/runpod-slim/ComfyUI
+source .venv-cu128/bin/activate
+nohup python main.py --listen 0.0.0.0 --port 8188 --enable-cors-header --disable-dynamic-vram  --reserve-vram 3 > /comfyui.log 2>&1 &
+
+echo "Waiting for ComfyUI to come up..."
+until curl -s http://127.0.0.1:8188/system_stats > /dev/null 2>&1; do
+  sleep 2
+done
+echo "Ready. Free memory:"
+free -h
+EOF
+chmod +x /workspace/runpod-slim/ComfyUI/RamitUtils/fresh_start.sh
