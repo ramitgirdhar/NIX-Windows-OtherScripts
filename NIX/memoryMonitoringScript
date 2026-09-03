@@ -1,8 +1,13 @@
 cat << 'EOF' > /workspace/runpod-slim/ComfyUI/RamitUtils/memcheck.sh
 #!/bin/bash
-free | awk '/Mem:/ {printf "RAM: %.1f%% used (%.1fGB / %.1fGB)\n", $3/$2*100, $3/1024/1024, $2/1024/1024}'
-echo "---"
-nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader | \
-awk -F', ' '{split($2,u," "); split($3,t," "); printf "GPU: %s | VRAM: %.1f%% used (%s / %s) | Util: %s\n", $1, u[1]/t[1]*100, $2, $3, $4}'
+while true; do
+  clear
+  echo "=== $(date) ==="
+  free | awk '/Mem:/ {printf "RAM: %.1f%% used (%.1fGB / %.1fGB)\n", $3/$2*100, $3/1024/1024, $2/1024/1024}'
+  echo "---"
+  nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader | \
+  awk -F', ' '{split($2,u," "); split($3,t," "); printf "GPU: %s | VRAM: %.1f%% used (%s / %s) | Util: %s\n", $1, u[1]/t[1]*100, $2, $3, $4}'
+  sleep 2
+done
 EOF
 chmod +x /workspace/runpod-slim/ComfyUI/RamitUtils/memcheck.sh
