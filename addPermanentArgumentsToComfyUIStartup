@@ -1,0 +1,3 @@
+echo "--disable-dynamic-vram" >> /workspace/runpod-slim/comfyui_args.txt
+echo "--reserve-vram 3" >> /workspace/runpod-slim/comfyui_args.txt
+cat /workspace/runpod-slim/comfyui_args.txt
