@@ -1,0 +1,21 @@
+{
+  "LTXVAudioVAEDecode": "https://github.com/Lightricks/ComfyUI-LTXVideo",
+  "LTXVConcatAVLatent": "https://github.com/Lightricks/ComfyUI-LTXVideo",
+  "LTXVConditioning": "https://github.com/Lightricks/ComfyUI-LTXVideo",
+  "LTXVLatentUpsampler": "https://github.com/Lightricks/ComfyUI-LTXVideo",
+  "LTXVSeparateAVLatent": "https://github.com/Lightricks/ComfyUI-LTXVideo",
+
+  "DualCLIPLoaderGGUF": "https://github.com/city96/ComfyUI-GGUF",
+  "UnetLoaderGGUF": "https://github.com/city96/ComfyUI-GGUF",
+  "CLIPLoaderGGUF": "https://github.com/city96/ComfyUI-GGUF",
+  "TripleCLIPLoaderGGUF": "https://github.com/city96/ComfyUI-GGUF",
+  "UnetLoaderGGUFAdvanced": "https://github.com/city96/ComfyUI-GGUF",
+
+  "VAELoaderKJ": "https://github.com/kijai/ComfyUI-KJNodes",
+  "ModelPreviewOverrideKJ": "https://github.com/kijai/ComfyUI-KJNodes",
+  "LatentUpscaleModelLoader": "https://github.com/kijai/ComfyUI-KJNodes",
+
+  "LTXDirector": "https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI",
+  "LTXDirectorGuide": "https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI",
+  "LTXDirectorCropGuides": "https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI"
+}
