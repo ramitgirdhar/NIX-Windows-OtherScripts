@@ -139,6 +139,7 @@ log "=== Installing custom nodes ==="
 clone_node "https://github.com/Lightricks/ComfyUI-LTXVideo"
 clone_node "https://github.com/city96/ComfyUI-GGUF"
 clone_node "https://github.com/kijai/ComfyUI-KJNodes"
+clone_node "https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI"   # provides LTXDirector, LTXDirectorGuide, LTXDirectorCropGuides
 
 # =============================================================================
 # 2. MODELS (run in parallel to speed up cold start; wait at the end)
