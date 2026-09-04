@@ -1,0 +1,197 @@
+#!/bin/bash
+###############################################################################
+# RunPod startup script — pulls custom nodes + models for
+# LTX_Director_2_Workflow_GGUF.json on every pod boot.
+# Safe to re-run: skips anything already present.
+###############################################################################
+set -uo pipefail  # NOTE: no -e, so one failed download doesn't kill the rest
+
+# ---- CONFIG -----------------------------------------------------------------
+COMFYUI_DIR="${COMFYUI_DIR:-/workspace/runpod-slim/ComfyUI}"
+CUSTOM_NODES_DIR="$COMFYUI_DIR/custom_nodes"
+MODELS_DIR="$COMFYUI_DIR/models"
+LOG_FILE="/workspace/startup_download.log"
+
+HF_TOKEN="${HF_TOKEN:-}"   # export HF_TOKEN before running if any repo is gated
+CONNECTIONS_PER_FILE="${CONNECTIONS_PER_FILE:-16}"  # parallel connections per file (aria2c -x/-s)
+PARALLEL_FILES="${PARALLEL_FILES:-3}"               # how many models to download at once
+
+mkdir -p "$MODELS_DIR"/{vae,text_encoders,latent_upscale_models,unet}
+mkdir -p "$CUSTOM_NODES_DIR"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
+
+# ---- ensure aria2c is available for multi-connection downloads --------------
+ensure_aria2() {
+    if command -v aria2c >/dev/null 2>&1; then
+        return 0
+    fi
+    log "aria2c not found, installing..."
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq >> "$LOG_FILE" 2>&1 && apt-get install -y -qq aria2 >> "$LOG_FILE" 2>&1
+    fi
+    if command -v aria2c >/dev/null 2>&1; then
+        log "aria2c installed OK"
+        return 0
+    else
+        log "WARNING: could not install aria2c, falling back to wget (single connection, slower)"
+        return 1
+    fi
+}
+HAVE_ARIA2=0
+if ensure_aria2; then HAVE_ARIA2=1; fi
+
+# ---- throttle: cap how many background download jobs run at once ------------
+# Prevents opening PARALLEL_FILES * CONNECTIONS_PER_FILE connections all at
+# once (which can trip HF/Civitai rate limits). Call before each `&` launch.
+throttle_jobs() {
+    while [ "$(jobs -rp | wc -l)" -ge "$PARALLEL_FILES" ]; do
+        wait -n
+    done
+}
+
+# ---- helper: clone a custom node repo if not already present ----------------
+clone_node() {
+    local repo_url="$1"
+    local dir_name
+    dir_name=$(basename "$repo_url" .git)
+    local dest="$CUSTOM_NODES_DIR/$dir_name"
+
+    if [ -d "$dest" ]; then
+        log "SKIP (exists) custom node: $dir_name"
+        return 0
+    fi
+
+    log "Cloning custom node: $dir_name"
+    if git clone --depth 1 "$repo_url" "$dest" >> "$LOG_FILE" 2>&1; then
+        if [ -f "$dest/requirements.txt" ]; then
+            log "Installing requirements for $dir_name"
+            pip install -r "$dest/requirements.txt" --break-system-packages >> "$LOG_FILE" 2>&1
+        fi
+        log "OK custom node: $dir_name"
+    else
+        log "FAILED custom node: $dir_name (see $LOG_FILE)"
+    fi
+}
+
+# ---- helper: download a model file if not already present -------------------
+# Uses aria2c with N parallel connections/segments per file when available
+# (much faster for large single files than a single-stream wget), falls back
+# to wget otherwise.
+# usage: download_model <url> <destination_path>
+download_model() {
+    local url="$1"
+    local dest="$2"
+    local dir; dir="$(dirname "$dest")"
+    local file; file="$(basename "$dest")"
+
+    if [ -f "$dest" ]; then
+        log "SKIP (exists) model: $file"
+        return 0
+    fi
+
+    mkdir -p "$dir"
+    log "Downloading (multi-connection): $file"
+
+    if [ "$HAVE_ARIA2" -eq 1 ]; then
+        local auth_args=()
+        if [ -n "$HF_TOKEN" ]; then
+            auth_args=(--header="Authorization: Bearer $HF_TOKEN")
+        fi
+        if aria2c \
+            -x "$CONNECTIONS_PER_FILE" \
+            -s "$CONNECTIONS_PER_FILE" \
+            -k 1M \
+            --file-allocation=none \
+            --summary-interval=30 \
+            --continue=true \
+            --auto-file-renaming=false \
+            --allow-overwrite=true \
+            "${auth_args[@]}" \
+            -d "$dir" -o "$file.part" \
+            "$url" >> "$LOG_FILE" 2>&1; then
+            mv "$dir/$file.part" "$dest"
+            log "OK model: $file"
+        else
+            log "FAILED model: $file (see $LOG_FILE)"
+        fi
+    else
+        # fallback: single-connection wget
+        local auth_header=()
+        if [ -n "$HF_TOKEN" ]; then
+            auth_header=(--header="Authorization: Bearer $HF_TOKEN")
+        fi
+        if wget -q "${auth_header[@]}" -O "$dest.part" "$url" 2>> "$LOG_FILE"; then
+            mv "$dest.part" "$dest"
+            log "OK model: $file"
+        else
+            rm -f "$dest.part"
+            log "FAILED model: $file (see $LOG_FILE)"
+        fi
+    fi
+}
+
+# =============================================================================
+# 1. CUSTOM NODES
+# =============================================================================
+log "=== Installing custom nodes ==="
+
+clone_node "https://github.com/Lightricks/ComfyUI-LTXVideo"
+clone_node "https://github.com/city96/ComfyUI-GGUF"
+clone_node "https://github.com/kijai/ComfyUI-KJNodes"
+
+# =============================================================================
+# 2. MODELS (run in parallel to speed up cold start; wait at the end)
+# =============================================================================
+log "=== Downloading models ==="
+
+# --- VAEs (Kijai/LTX2.3_comfy) ---
+throttle_jobs
+download_model \
+  "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_video_vae_bf16.safetensors" \
+  "$MODELS_DIR/vae/LTX23_video_vae_bf16.safetensors" &
+
+throttle_jobs
+download_model \
+  "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_audio_vae_bf16.safetensors" \
+  "$MODELS_DIR/vae/LTX23_audio_vae_bf16.safetensors" &
+
+throttle_jobs
+download_model \
+  "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/taeltx2_3.safetensors" \
+  "$MODELS_DIR/vae/taeltx2_3.safetensors" &
+
+# --- Text encoder / projection ---
+throttle_jobs
+download_model \
+  "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/text_encoders/ltx-2.3_text_projection_bf16.safetensors" \
+  "$MODELS_DIR/text_encoders/ltx-2.3_text_projection_bf16.safetensors" &
+
+# --- Gemma 3 12B text encoder (GGUF, referenced by workflow) ---
+throttle_jobs
+download_model \
+  "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q3_K_M.gguf" \
+  "$MODELS_DIR/text_encoders/gemma-3-12b-it-Q3_K_M.gguf" &
+
+# --- Latent upscaler (Lightricks/LTX-2.3) ---
+throttle_jobs
+download_model \
+  "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors" \
+  "$MODELS_DIR/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors" &
+
+# --- Main diffusion model (GGUF, unsloth) — biggest file, give it its own slot ---
+throttle_jobs
+download_model \
+  "https://huggingface.co/unsloth/LTX-2.3-GGUF/resolve/main/distilled-1.1/ltx-2.3-22b-distilled-1.1-Q4_K_M.gguf" \
+  "$MODELS_DIR/unet/ltx-2.3-22b-distilled-1.1-Q4_K_M.gguf" &
+
+# Wait for all remaining background downloads to finish before starting ComfyUI
+wait
+
+log "=== All downloads complete ==="
+log "Check $LOG_FILE for any FAILED entries before launching ComfyUI."
+
+# =============================================================================
+# 3. LAUNCH COMFYUI (uncomment / adjust to match your existing launch command)
+# =============================================================================
+# cd "$COMFYUI_DIR" && python3 main.py --listen 0.0.0.0 --port 8188
