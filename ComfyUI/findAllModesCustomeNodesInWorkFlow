@@ -1,0 +1,123 @@
+cat > extract_workflow_deps.py << 'EOF'
+import json, re, sys, os, glob, urllib.request
+
+CORE_NODES = {
+    "KSampler","KSamplerAdvanced","CLIPTextEncode","CLIPSetLastLayer","VAEDecode",
+    "VAEEncode","VAEEncodeForInpaint","CheckpointLoaderSimple","LoraLoader",
+    "VAELoader","ControlNetLoader","ControlNetApply","ControlNetApplyAdvanced",
+    "EmptyLatentImage","LatentUpscale","LatentUpscaleBy","LatentComposite",
+    "ImageScale","ImageScaleBy","SaveImage","LoadImage","PreviewImage",
+    "CLIPLoader","UNETLoader","DualCLIPLoader","UpscaleModelLoader",
+    "ImageUpscaleWithModel","ConditioningCombine","ConditioningSetArea",
+    "ConditioningZeroOut","CLIPVisionLoader","CLIPVisionEncode","StyleModelLoader",
+    "unCLIPConditioning","GLIGENLoader","DiffControlNetLoader","Note","Reroute",
+    "PrimitiveNode","MarkdownNote"
+}
+
+MODEL_EXTS = re.compile(r'\.(safetensors|ckpt|pt|pth|bin|onnx)$', re.I)
+
+def load_json(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def get_nodes(data):
+    if isinstance(data, dict) and "nodes" in data:
+        return data["nodes"]
+    elif isinstance(data, dict):
+        return list(data.values())
+    return []
+
+def extract(path):
+    data = load_json(path)
+    nodes = get_nodes(data)
+    models = set()
+    node_types = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        ntype = node.get("type") or node.get("class_type")
+        if ntype:
+            node_types.add(ntype)
+        widgets = node.get("widgets_values")
+        if isinstance(widgets, list):
+            for w in widgets:
+                if isinstance(w, str) and MODEL_EXTS.search(w):
+                    models.add(w)
+        inputs = node.get("inputs")
+        if isinstance(inputs, dict):
+            for v in inputs.values():
+                if isinstance(v, str) and MODEL_EXTS.search(v):
+                    models.add(v)
+    custom_nodes = node_types - CORE_NODES
+    return models, custom_nodes
+
+def find_workflow_files(target):
+    if os.path.isdir(target):
+        return sorted(glob.glob(os.path.join(target, "**", "*.json"), recursive=True))
+    elif any(ch in target for ch in "*?["):
+        return sorted(glob.glob(target, recursive=True))
+    else:
+        return [target]
+
+def fetch_manager_index():
+    url = "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as r:
+            data = json.loads(r.read().decode())
+        return data.get("custom_nodes", [])
+    except Exception as e:
+        print(f"[warn] couldn't fetch ComfyUI-Manager index: {e}", file=sys.stderr)
+        return []
+
+if __name__ == "__main__":
+    target = sys.argv[1] if len(sys.argv) > 1 else "."
+    files = find_workflow_files(target)
+
+    if not files:
+        print(f"No workflow JSON files found at: {target}", file=sys.stderr)
+        sys.exit(1)
+
+    all_models = set()
+    all_custom_nodes = set()
+    per_file_summary = {}
+
+    for f in files:
+        try:
+            models, custom_nodes = extract(f)
+        except Exception as e:
+            print(f"[warn] failed to parse {f}: {e}", file=sys.stderr)
+            continue
+        all_models |= models
+        all_custom_nodes |= custom_nodes
+        per_file_summary[f] = (len(models), len(custom_nodes))
+
+    print(f"=== Scanned {len(files)} workflow file(s) ===")
+    for f, (m, c) in per_file_summary.items():
+        print(f"  {f}: {m} models, {c} custom node types")
+
+    print("\n=== ALL MODELS REFERENCED (deduped) ===")
+    for m in sorted(all_models):
+        print(m)
+
+    print("\n=== ALL NON-CORE NODE TYPES (deduped, likely custom nodes) ===")
+    for n in sorted(all_custom_nodes):
+        print(n)
+
+    if all_custom_nodes:
+        print("\n=== Attempting to resolve repo URLs via ComfyUI-Manager index ===")
+        manager_list = fetch_manager_index()
+        for n in sorted(all_custom_nodes):
+            match = None
+            for entry in manager_list:
+                if n in entry.get("title", "") or any(n in f for f in entry.get("files", [])):
+                    match = entry.get("files", [None])[0]
+                    break
+            print(f"{n}: {match or 'NOT FOUND — search manually'}")
+
+    with open("models_list.txt", "w") as f:
+        f.write("\n".join(sorted(all_models)))
+    with open("custom_nodes_list.txt", "w") as f:
+        f.write("\n".join(sorted(all_custom_nodes)))
+
+    print("\nWrote models_list.txt and custom_nodes_list.txt")
+EOF
